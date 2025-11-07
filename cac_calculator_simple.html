@@ -1,0 +1,146 @@
+
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CAC калькулятор — каналы привлечения</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root{--border:#e5e7eb;--muted:#6b7280;}
+    body{background:#f8fafc;color:#0f172a}
+    .card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:12px}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    th,td{border-bottom:1px solid var(--border);padding:6px 8px;text-align:right;vertical-align:middle}
+    th:first-child,td:first-child{text-align:left}
+    input[type="number"], input[type="text"]{
+      width:100%;border:1px solid var(--border);border-radius:10px;padding:4px 8px;font-size:14px
+    }
+    .muted{color:var(--muted)}
+    .iconbtn{cursor:pointer;border:1px solid var(--border);border-radius:10px;padding:4px 8px;background:#fff}
+    .iconbtn:hover{background:#f3f4f6}
+    .good{background:#ecfdf5;color:#065f46;border-color:#a7f3d0}
+    .bad{background:#fef2f2;color:#991b1b;border-color:#fecaca}
+    .mid{background:#eff6ff;color:#1e40af;border-color:#bfdbfe}
+    .nowrap{white-space:nowrap}
+  </style>
+</head>
+<body>
+<div class="max-w-6xl mx-auto p-3 space-y-3">
+
+  <header class="flex items-center justify-between gap-3">
+    <h1 class="text-xl md:text-2xl font-bold">CAC калькулятор</h1>
+    <div class="flex items-center gap-2">
+      <span class="muted text-sm">Валюта</span>
+      <select id="currency" class="iconbtn">
+        <option value="RUB">RUB</option>
+        <option value="USD">USD</option>
+        <option value="EUR">EUR</option>
+        <option value="KZT">KZT</option>
+      </select>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="muted text-sm mb-2">Заполните по каналам: <b>Затраты</b>, <b>Клиенты</b>, <b>LTV</b> и <b>Маржинальность</b>. CAC и прибыль считаются автоматически. Добавлять/удалять и переименовывать каналы можно прямо в таблице.</div>
+    <table id="tbl">
+      <thead>
+        <tr class="text-sm">
+          <th style="min-width:160px">Канал</th>
+          <th class="nowrap">Затраты</th>
+          <th class="nowrap">Клиенты, шт</th>
+          <th class="nowrap">CAC</th>
+          <th class="nowrap">LTV/клиент</th>
+          <th class="nowrap">Маржинальность, %</th>
+          <th class="nowrap">Выручка LTV</th>
+          <th class="nowrap">Валовая маржа</th>
+          <th class="nowrap">Чистая прибыль</th>
+          <th class="nowrap">
+            <button id="addRowHeader" class="iconbtn" title="Добавить канал">+ Канал</button>
+          </th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="10" class="muted text-xs">CAC = Затраты / Клиенты. Прибыль = (Клиенты × LTV × Маржинальность) − Затраты.</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 class="font-semibold mb-2">Эффективность каналов</h2>
+    <div class="muted text-sm mb-2">Столбики = <b>чистая прибыль</b> по каналам. Цвет показывает эффективность: <span style="color:#22c55e">зелёный</span> — прибыльно, <span style="color:#60a5fa">синий</span> — около нуля, <span style="color:#ef4444">красный</span> — в убытке.</div>
+    <canvas id="bar" height="150"></canvas>
+  </div>
+
+</div>
+
+<script>
+function num(v){ if(v==null) return 0; v=(''+v).replace(/[^0-9.,-]/g,'').replace(',', '.'); const n=Number(v); return Number.isFinite(n)?n:0; }
+function fmtMoney(x, cur){
+  try{ return new Intl.NumberFormat(undefined,{style:'currency',currency:cur,maximumFractionDigits:0}).format(x||0) }
+  catch{ return (cur||'')+' '+(x||0).toLocaleString() }
+}
+
+const rowsEl=document.getElementById('rows'); const curSel=document.getElementById('currency'); let barChart=null;
+
+function makeRow(data){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td><input type="text" class="name" value="${data.name||''}" /></td>
+    <td><input type="number" class="cost" min="0" step="1" value="${data.cost||0}" /></td>
+    <td><input type="number" class="clients" min="0" step="1" value="${data.clients||0}" /></td>
+    <td class="cac nowrap">—</td>
+    <td><input type="number" class="ltv" min="0" step="1" value="${data.ltv||0}" /></td>
+    <td><input type="number" class="margin" min="0" max="100" step="1" value="${data.margin??40}" /></td>
+    <td class="rev nowrap">—</td>
+    <td class="gm nowrap">—</td>
+    <td class="profit nowrap">—</td>
+    <td class="nowrap">
+      <button class="iconbtn addBelow" title="Добавить канал ниже">+</button>
+      <button class="iconbtn delRow" title="Удалить канал">×</button>
+    </td>`;
+  tr.querySelectorAll('input').forEach(i=>i.addEventListener('input',recalcAll));
+  tr.querySelector('.addBelow').addEventListener('click',()=>{tr.insertAdjacentElement('afterend',makeRow({name:'Новый канал',cost:0,clients:0,ltv:0,margin:40}));recalcAll();});
+  tr.querySelector('.delRow').addEventListener('click',()=>{tr.remove();recalcAll();});
+  return tr;
+}
+
+[{name:'Контекстная реклама',cost:300000,clients:120,ltv:12000,margin:40},
+ {name:'Таргетированная реклама',cost:220000,clients:80,ltv:11000,margin:38},
+ {name:'SEO',cost:150000,clients:150,ltv:9000,margin:45},
+ {name:'Партнёрские программы',cost:80000,clients:60,ltv:10000,margin:35}]
+ .forEach(s=>rowsEl.appendChild(makeRow(s)));
+
+document.getElementById('addRowHeader').addEventListener('click',()=>{rowsEl.appendChild(makeRow({name:'Новый канал',cost:0,clients:0,ltv:0,margin:40}));recalcAll();});
+curSel.addEventListener('change',recalcAll);
+
+function recalcAll(){
+  const cur=curSel.value, labels=[],profits=[],colors=[];
+  rowsEl.querySelectorAll('tr').forEach(tr=>{
+    const name=tr.querySelector('.name').value||'Канал';
+    const cost=num(tr.querySelector('.cost').value);
+    const clients=num(tr.querySelector('.clients').value);
+    const ltv=num(tr.querySelector('.ltv').value);
+    const mPct=num(tr.querySelector('.margin').value); const m=mPct>1?mPct/100:mPct;
+    const cac=clients>0?cost/clients:0;
+    const rev=clients*ltv, gm=rev*m, profit=gm-cost;
+    tr.querySelector('.cac').textContent=clients>0?fmtMoney(cac,cur):'—';
+    tr.querySelector('.rev').textContent=fmtMoney(rev,cur);
+    tr.querySelector('.gm').textContent=fmtMoney(gm,cur);
+    tr.querySelector('.profit').textContent=fmtMoney(profit,cur);
+    let color='#22c55e'; if(cost>0&&Math.abs(profit)<=0.1*cost)color='#60a5fa'; else if(profit<0)color='#ef4444';
+    tr.style.background=color==='ef4444'?'#fef2f2':'#fff';
+    labels.push(name); profits.push(profit); colors.push(color);
+  });
+  const ctx=document.getElementById('bar'); if(barChart)barChart.destroy();
+  barChart=new Chart(ctx,{type:'bar',data:{labels,datasets:[{label:'Чистая прибыль',data:profits,backgroundColor:colors}]},
+  options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+}
+document.addEventListener('DOMContentLoaded',recalcAll);
+</script>
+</body>
+</html>
